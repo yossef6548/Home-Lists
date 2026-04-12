@@ -21,64 +21,72 @@ export async function processWithAI(text: string): Promise<AIResponse> {
     categoryCache = categories
       .filter((c) => !c.parentId)
       .map((c) => ({
-        store: c.name,
-        sections: c.children.map((child) => child.name),
+        חנות: c.name,
+        מחלקות: c.children.map((child) => child.name),
       }));
     lastCacheUpdate = now;
   }
 
-  // Stronger, more explicit prompt for multi-item extraction and translation
-  const prompt = `Analyze: "${text}". 
-Instructions:
-1. Identify EVERY distinct task or shopping item.
-2. Translate and rephrase to concise Hebrew.
-3. SHOPPING: Nouns (e.g. "out of milk", "need bread", "computer").
-4. TASK: Actions (e.g. "clean", "fix", "call").
-5. Categorize SHOPPING by Store Type -> Section.
+  const prompt = `נתח את הטקסט ופרק אותו לרשימה של פריטים נפרדים.
+קלט: "${text}"
 
-Examples:
-- "need to do the dishes and buy milk" -> 
-  {"items": [{"type":"TASK","itemName":"לשטוף כלים"},{"type":"SHOPPING","itemName":"חלב","categoryPath":["סופרמרקט","מוצרי חלב"]}]}
-- "out of bread and milk" -> 
-  {"items": [{"type":"SHOPPING","itemName":"לחם","categoryPath":["סופרמרקט","מאפייה"]},{"type":"SHOPPING","itemName":"חלב","categoryPath":["סופרמרקט","מוצרי חלב"]}]}
+חוקים נוקשים:
+1. חובה לפצל כל בקשה לפריט נפרד במערך ה-JSON. (למשל: "לחם וחלב" -> 2 פריטים נפרדים).
+2. שמות עצם או קניות -> SHOPPING.
+3. פעולות או מטלות -> TASK.
+4. שים לב: "לשטוף כלים" הוא TASK (מטלה), לא SHOPPING.
+5. כל פריט בשורה נפרדת בתוך המערך.
 
-Stores: ${JSON.stringify(categoryCache)}
-Return ONLY JSON in format: {"items": [{"type":"TASK"|"SHOPPING","categoryPath":["Store","Section"],"itemName":"Name"}]}
+דוגמה למבנה המצופה:
+{
+  "items": [
+    {"type": "TASK", "itemName": "לשטוף כלים"},
+    {"type": "SHOPPING", "itemName": "לחם", "categoryPath": ["סופרמרקט", "מאפייה"]},
+    {"type": "SHOPPING", "itemName": "חלב", "categoryPath": ["סופרמרקט", "מוצרי חלב"]}
+  ]
+}
+
+היררכיית חנויות קיימת: ${JSON.stringify(categoryCache)}
+החזר אך ורק JSON תקין.
 `;
 
-  const response = await fetch(`${process.env.OLLAMA_URL}/api/generate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: "gemma4:latest", 
-      prompt: prompt,
-      stream: false,
-      format: "json",
-    }),
-  });
-
-  if (!response.ok) throw new Error("AI request failed");
-
-  const data = await response.json();
-  console.log(`AI Result for [${text}]:`, data.response);
-
-  let parsed;
   try {
-    parsed = JSON.parse(data.response);
-  } catch (e) {
-    console.error("JSON Parse Error:", data.response);
-    throw new Error("Invalid AI JSON");
-  }
-  
-  // Normalize the response to always return the items array
-  let items: AIItem[] = [];
-  if (parsed.items && Array.isArray(parsed.items)) {
-    items = parsed.items;
-  } else if (Array.isArray(parsed)) {
-    items = parsed;
-  } else {
-    items = [parsed];
-  }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 sec timeout
 
-  return { items };
+    const response = await fetch(`${process.env.OLLAMA_URL}/api/generate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "gemma4:latest", 
+        prompt: prompt,
+        stream: false,
+        format: "json",
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) throw new Error("AI request failed");
+
+    const data = await response.json();
+    console.error(`[AI DEBUG] Input: ${text} | Output: ${data.response}`);
+
+    let parsed = JSON.parse(data.response);
+    
+    let items: AIItem[] = [];
+    if (parsed.items && Array.isArray(parsed.items)) {
+      items = parsed.items;
+    } else if (Array.isArray(parsed)) {
+      items = parsed;
+    } else {
+      items = [parsed];
+    }
+
+    return { items: items.filter((i: any) => i && i.itemName) };
+  } catch (err) {
+    console.error(`[AI ERROR] ${err}`);
+    return { items: [] }; // Return empty list to trigger fallback in action
+  }
 }

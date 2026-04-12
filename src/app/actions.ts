@@ -5,7 +5,6 @@ import { processWithAI } from "@/lib/ai";
 import { broadcastUpdate } from "@/lib/events";
 import { ItemType } from "@prisma/client";
 
-// Global sequential queue for AI processing
 let aiProcessingQueue = Promise.resolve();
 
 export async function addItemAction(rawText: string) {
@@ -23,6 +22,10 @@ export async function addItemAction(rawText: string) {
       try {
         const aiResponse = await processWithAI(rawText);
         
+        if (!aiResponse.items || aiResponse.items.length === 0) {
+          throw new Error("Empty AI response");
+        }
+
         await prisma.$transaction(async (tx) => {
           for (const aiResult of aiResponse.items) {
             let categoryId: string | null = null;
@@ -30,7 +33,7 @@ export async function addItemAction(rawText: string) {
             if (aiResult.type === "SHOPPING" && aiResult.categoryPath && aiResult.categoryPath.length > 0) {
               let parentId: string | null = null;
               for (const catName of aiResult.categoryPath) {
-                let category = await tx.category.findFirst({
+                let category: { id: string } | null = await tx.category.findFirst({
                   where: { name: catName, parentId: parentId },
                 });
 
@@ -52,17 +55,15 @@ export async function addItemAction(rawText: string) {
               },
             });
           }
-          
-          // Use deleteMany to avoid P2025 if already deleted
           await tx.item.deleteMany({ where: { id: placeholder.id } });
         });
 
         broadcastUpdate();
       } catch (error) {
-        console.error("AI background error:", error);
-        // Only update if it still exists
+        console.error("[QUEUE ERROR]", error);
+        // On error, convert placeholder to a normal task with the original text
         await prisma.item.updateMany({
-          where: { id: placeholder.id, name: { startsWith: "🔄 מעבד:" } },
+          where: { id: placeholder.id },
           data: { name: rawText },
         });
         broadcastUpdate();
@@ -71,7 +72,7 @@ export async function addItemAction(rawText: string) {
 
     return { success: true };
   } catch (error) {
-    console.error("addItemAction failure:", error);
+    console.error("addItemAction fatal failure:", error);
     return { success: false, error: "Internal server error" };
   }
 }
@@ -80,6 +81,23 @@ export async function toggleItemAction(id: string, isChecked: boolean) {
   await prisma.item.update({
     where: { id },
     data: { isChecked },
+  });
+  broadcastUpdate();
+}
+
+export async function moveItemAction(id: string, type: ItemType, categoryId: string | null = null) {
+  await prisma.item.update({
+    where: { id },
+    data: { type, categoryId },
+  });
+  await cleanupEmptyCategories();
+  broadcastUpdate();
+}
+
+export async function renameCategoryAction(id: string, name: string) {
+  await prisma.category.update({
+    where: { id },
+    data: { name },
   });
   broadcastUpdate();
 }
@@ -93,7 +111,7 @@ export async function clearCheckedAction(type: ItemType) {
 }
 
 export async function deleteItemAction(id: string) {
-  await prisma.item.delete({
+  await prisma.item.deleteMany({
     where: { id },
   });
   await cleanupEmptyCategories();
@@ -111,11 +129,10 @@ async function cleanupEmptyCategories() {
 
     if (emptyCategories.length > 0) {
       for (const cat of emptyCategories) {
-        // Double check it's still empty to avoid race conditions
         const count = await prisma.item.count({ where: { categoryId: cat.id } });
         const subCount = await prisma.category.count({ where: { parentId: cat.id } });
         if (count === 0 && subCount === 0) {
-          await prisma.category.delete({ where: { id: cat.id } }).catch(() => {});
+          await prisma.category.deleteMany({ where: { id: cat.id } });
         }
       }
       await cleanupEmptyCategories();
@@ -123,36 +140,6 @@ async function cleanupEmptyCategories() {
   } catch (err) {
     console.error("Cleanup error:", err);
   }
-}
-
-export async function manualAddItemAction(name: string, type: ItemType, categoryId?: string) {
-  await prisma.item.create({
-    data: {
-      name,
-      type,
-      categoryId: categoryId || null,
-    },
-  });
-  broadcastUpdate();
-}
-
-export async function createCategoryAction(name: string, parentId?: string) {
-  await prisma.category.create({
-    data: {
-      name,
-      parentId: parentId || null,
-    },
-  });
-  broadcastUpdate();
-}
-
-export async function deleteCategoryAction(id: string) {
-  await prisma.$transaction([
-    prisma.item.updateMany({ where: { categoryId: id }, data: { categoryId: null } }),
-    prisma.category.updateMany({ where: { parentId: id }, data: { parentId: null } }),
-    prisma.category.delete({ where: { id } }),
-  ]);
-  broadcastUpdate();
 }
 
 export async function getAppData() {
@@ -165,4 +152,13 @@ export async function getAppData() {
     }),
   ]);
   return { items, categories };
+}
+
+export async function deleteCategoryAction(id: string) {
+  await prisma.$transaction([
+    prisma.item.updateMany({ where: { categoryId: id }, data: { categoryId: null } }),
+    prisma.category.updateMany({ where: { parentId: id }, data: { parentId: null } }),
+    prisma.category.deleteMany({ where: { id } }),
+  ]);
+  broadcastUpdate();
 }
