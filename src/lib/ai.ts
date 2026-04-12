@@ -27,41 +27,33 @@ export async function processWithAI(text: string): Promise<AIResponse> {
     lastCacheUpdate = now;
   }
 
-  const prompt = `נתח את הטקסט ופרק אותו לרשימה של פריטים נפרדים.
-קלט: "${text}"
+  const systemPrompt = `אתה עוזר חכם לניהול רשימות. 
+התפקיד שלך הוא לנתח את הקלט ולפצל אותו לפריטים נפרדים.
+חוקים:
+1. פצל כל בקשה לפריט נפרד (למשל: "X וגם Y" -> 2 פריטים).
+2. שמות עצם/קניות -> SHOPPING. פעולות/מטלות -> TASK.
+3. תרגם ונסח לעברית קצרה.
+4. החזר אך ורק JSON תקין במבנה: {"items": [{"type":"TASK"|"SHOPPING","categoryPath":["חנות","מחלקה"],"itemName":"שם פריט"}]}`;
 
-חוקים נוקשים:
-1. חובה לפצל כל בקשה לפריט נפרד במערך ה-JSON. (למשל: "לחם וחלב" -> 2 פריטים נפרדים).
-2. שמות עצם או קניות -> SHOPPING.
-3. פעולות או מטלות -> TASK.
-4. שים לב: "לשטוף כלים" הוא TASK (מטלה), לא SHOPPING.
-5. כל פריט בשורה נפרדת בתוך המערך.
-
-דוגמה למבנה המצופה:
-{
-  "items": [
-    {"type": "TASK", "itemName": "לשטוף כלים"},
-    {"type": "SHOPPING", "itemName": "לחם", "categoryPath": ["סופרמרקט", "מאפייה"]},
-    {"type": "SHOPPING", "itemName": "חלב", "categoryPath": ["סופרמרקט", "מוצרי חלב"]}
-  ]
-}
-
-היררכיית חנויות קיימת: ${JSON.stringify(categoryCache)}
-החזר אך ורק JSON תקין.
-`;
+  const userPrompt = `נתח ופצל את הטקסט הבא: "${text}"
+היררכיית חנויות קיימת: ${JSON.stringify(categoryCache)}`;
 
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000); // 45 sec timeout
+    const timeoutId = setTimeout(() => controller.abort(), 120000);
 
     const response = await fetch(`${process.env.OLLAMA_URL}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "qwen2.5:7b-instruct", 
-        prompt: prompt,
+        model: "llama3.1:8b", 
+        system: systemPrompt,
+        prompt: userPrompt,
         stream: false,
         format: "json",
+        options: {
+          temperature: 0.1,
+        }
       }),
       signal: controller.signal
     });
@@ -71,9 +63,17 @@ export async function processWithAI(text: string): Promise<AIResponse> {
     if (!response.ok) throw new Error("AI request failed");
 
     const data = await response.json();
-    console.error(`[AI DEBUG] Input: ${text} | Output: ${data.response}`);
+    let rawResponse = data.response || "";
+    
+    // Log to stderr so it shows up in Docker logs
+    process.stderr.write(`[AI RAW] ${rawResponse}\n`);
 
-    let parsed = JSON.parse(data.response);
+    const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      rawResponse = jsonMatch[0];
+    }
+
+    let parsed = JSON.parse(rawResponse);
     
     let items: AIItem[] = [];
     if (parsed.items && Array.isArray(parsed.items)) {
@@ -86,7 +86,7 @@ export async function processWithAI(text: string): Promise<AIResponse> {
 
     return { items: items.filter((i: any) => i && i.itemName) };
   } catch (err) {
-    console.error(`[AI ERROR] ${err}`);
-    return { items: [] }; // Return empty list to trigger fallback in action
+    process.stderr.write(`[AI ERROR] ${err}\n`);
+    return { items: [] }; 
   }
 }
