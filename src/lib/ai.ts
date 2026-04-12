@@ -58,7 +58,7 @@ export async function processWithAI(text: string): Promise<AIResponse> {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "gemma4:latest", 
+        model: "qwen2.5:7b-instruct", 
         prompt: prompt,
         stream: false,
         format: "json",
