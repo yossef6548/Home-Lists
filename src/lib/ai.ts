@@ -2,7 +2,8 @@ import prisma from "./prisma";
 
 export interface AIItem {
   type: "TASK" | "SHOPPING";
-  categoryPath?: string[];
+  categoryName: string; 
+  parentCategoryName: string;
   itemName: string;
 }
 
@@ -10,33 +11,36 @@ export interface AIResponse {
   items: AIItem[];
 }
 
-let categoryCache: any = null;
-let lastCacheUpdate = 0;
-const CACHE_TTL = 30000;
+// המקור היחיד לאמת - היררכיה קבועה מראש
+export const FIXED_HIERARCHY: Record<string, string[]> = {
+  "סופרמרקט": ["פירות וירקות", "חלבי וביצים", "בשר ודגים", "מאפייה", "קפואים", "שימורים ורטבים", "משקאות", "ניקיון וטואלטיקה", "דגנים וקטניות", "חטיפים ומתוקים"],
+  "פארם": ["תרופות", "טיפוח ויופי", "תינוקות", "בריאות"],
+  "טמבור": ["כלי עבודה", "חשמל ותאורה", "צבע ותחזוקה", "גינון"],
+  "אלקטרוניקה": ["מחשבים", "סלולר", "אביזרים"],
+  "לבית": ["כלי בית", "טקסטיל", "ריהוט"],
+  "אחר": ["כללי"]
+};
 
 export async function processWithAI(text: string): Promise<AIResponse> {
-  const now = Date.now();
-  if (!categoryCache || (now - lastCacheUpdate) > CACHE_TTL) {
-    const categories = await prisma.category.findMany({ include: { children: true } });
-    categoryCache = categories
-      .filter((c) => !c.parentId)
-      .map((c) => ({
-        חנות: c.name,
-        מחלקות: c.children.map((child) => child.name),
-      }));
-    lastCacheUpdate = now;
-  }
+  const systemPrompt = `אתה עוזר חכם לניהול רשימות. עליך לבצע את המשימה לפי השלבים הבאים:
 
-  const systemPrompt = `אתה עוזר חכם לניהול רשימות. 
-התפקיד שלך הוא לנתח את הקלט ולפצל אותו לפריטים נפרדים.
-חוקים:
-1. פצל כל בקשה לפריט נפרד (למשל: "X וגם Y" -> 2 פריטים).
-2. שמות עצם/קניות -> SHOPPING. פעולות/מטלות -> TASK.
-3. תרגם ונסח לעברית קצרה.
-4. החזר אך ורק JSON תקין במבנה: {"items": [{"type":"TASK"|"SHOPPING","categoryPath":["חנות","מחלקה"],"itemName":"שם פריט"}]}`;
+שלב 1 (Understand): הבן את כוונת המשתמש בטקסט הגולמי.
+שלב 2 (Analyze): זהה את כל הבקשות השונות (פצל משפטים מורכבים לפריטים בודדים).
+שלב 3 (Isolate): הפרד בין מטלות (TASK) לבין פריטי קנייה (SHOPPING). שמות עצם הם תמיד SHOPPING.
+שלב 4 (Locate): עבור כל פריט SHOPPING, מצא את ה-"חנות" וה-"מחלקה" המתאימים ביותר מתוך הרשימה הסגורה למטה.
 
-  const userPrompt = `נתח ופצל את הטקסט הבא: "${text}"
-היררכיית חנויות קיימת: ${JSON.stringify(categoryCache)}`;
+רשימת קטגוריות מותרת (חנות -> מחלקות):
+${Object.entries(FIXED_HIERARCHY).map(([store, divs]) => `- ${store}: ${divs.join(", ")}`).join("\n")}
+
+חוקים נוקשים:
+- החזר אך ורק JSON תקין.
+- אין להמציא קטגוריות חדשות. השתמש רק בקיימות.
+- ניסוח: עברית קצרה ותקנית. אל תשמיט אותיות (למשל: "לחם" ולא "חם", "לשטוף" ולא "שטוף").
+
+דוגמאות:
+- "לקנות חלב ולשטוף כלים" -> {"items": [{"type":"SHOPPING", "parentCategoryName":"סופרמרקט", "categoryName":"חלבי וביצים", "itemName":"חלב"}, {"type":"TASK", "parentCategoryName":"", "categoryName":"", "itemName":"לשטוף כלים"}]}
+- "צריך סוללות ומחשב" -> {"items": [{"type":"SHOPPING", "parentCategoryName":"טמבור", "categoryName":"חשמל ותאורה", "itemName":"סוללות"}, {"type":"SHOPPING", "parentCategoryName":"אלקטרוניקה", "categoryName":"מחשבים", "itemName":"מחשב"}]}
+`;
 
   try {
     const controller = new AbortController();
@@ -48,45 +52,26 @@ export async function processWithAI(text: string): Promise<AIResponse> {
       body: JSON.stringify({
         model: "llama3.1:8b", 
         system: systemPrompt,
-        prompt: userPrompt,
+        prompt: `נתח ופצל לעברית: "${text}"`,
         stream: false,
         format: "json",
-        options: {
-          temperature: 0.1,
-        }
+        options: { temperature: 0 }
       }),
       signal: controller.signal
     });
 
     clearTimeout(timeoutId);
-
-    if (!response.ok) throw new Error("AI request failed");
-
     const data = await response.json();
     let rawResponse = data.response || "";
-    
-    // Log to stderr so it shows up in Docker logs
-    process.stderr.write(`[AI RAW] ${rawResponse}\n`);
-
     const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      rawResponse = jsonMatch[0];
-    }
+    if (jsonMatch) rawResponse = jsonMatch[0];
 
-    let parsed = JSON.parse(rawResponse);
-    
-    let items: AIItem[] = [];
-    if (parsed.items && Array.isArray(parsed.items)) {
-      items = parsed.items;
-    } else if (Array.isArray(parsed)) {
-      items = parsed;
-    } else {
-      items = [parsed];
-    }
+    const parsed = JSON.parse(rawResponse);
+    const items = Array.isArray(parsed.items) ? parsed.items : [parsed];
 
     return { items: items.filter((i: any) => i && i.itemName) };
   } catch (err) {
-    process.stderr.write(`[AI ERROR] ${err}\n`);
+    console.error("[AI ERROR]", err);
     return { items: [] }; 
   }
 }

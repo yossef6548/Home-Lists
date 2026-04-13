@@ -1,14 +1,33 @@
 "use server";
 
 import prisma from "@/lib/prisma";
-import { processWithAI } from "@/lib/ai";
+import { processWithAI, FIXED_HIERARCHY } from "@/lib/ai";
 import { broadcastUpdate } from "@/lib/events";
 import { ItemType } from "@prisma/client";
 
 let aiProcessingQueue = Promise.resolve();
 
+// Seed function to ensure the hierarchy is perfect
+export async function ensureStaticHierarchy() {
+  for (const [storeName, divisions] of Object.entries(FIXED_HIERARCHY)) {
+    let store = await prisma.category.findFirst({ where: { name: storeName, parentId: null } });
+    if (!store) {
+      store = await prisma.category.create({ data: { name: storeName } });
+    }
+
+    for (const divName of divisions) {
+      const exists = await prisma.category.findFirst({ where: { name: divName, parentId: store.id } });
+      if (!exists) {
+        await prisma.category.create({ data: { name: divName, parentId: store.id } });
+      }
+    }
+  }
+}
+
 export async function addItemAction(rawText: string) {
   try {
+    await ensureStaticHierarchy();
+    
     const placeholder = await prisma.item.create({
       data: {
         name: `🔄 מעבד: ${rawText}`,
@@ -22,28 +41,15 @@ export async function addItemAction(rawText: string) {
       try {
         const aiResponse = await processWithAI(rawText);
         
-        if (!aiResponse.items || aiResponse.items.length === 0) {
-          throw new Error("Empty AI response");
-        }
-
         await prisma.$transaction(async (tx) => {
           for (const aiResult of aiResponse.items) {
             let categoryId: string | null = null;
 
-            if (aiResult.type === "SHOPPING" && aiResult.categoryPath && aiResult.categoryPath.length > 0) {
-              let parentId: string | null = null;
-              for (const catName of aiResult.categoryPath) {
-                let category: { id: string } | null = await tx.category.findFirst({
-                  where: { name: catName, parentId: parentId },
-                });
-
-                if (!category) {
-                  category = await tx.category.create({
-                    data: { name: catName, parentId: parentId },
-                  });
-                }
-                parentId = category.id;
-                categoryId = category.id;
+            if (aiResult.type === "SHOPPING") {
+              const store = await tx.category.findFirst({ where: { name: aiResult.parentCategoryName, parentId: null } });
+              if (store) {
+                const division = await tx.category.findFirst({ where: { name: aiResult.categoryName, parentId: store.id } });
+                categoryId = division ? division.id : store.id;
               }
             }
 
@@ -61,7 +67,6 @@ export async function addItemAction(rawText: string) {
         broadcastUpdate();
       } catch (error) {
         console.error("[QUEUE ERROR]", error);
-        // On error, convert placeholder to a normal task with the original text
         await prisma.item.updateMany({
           where: { id: placeholder.id },
           data: { name: rawText },
@@ -72,93 +77,35 @@ export async function addItemAction(rawText: string) {
 
     return { success: true };
   } catch (error) {
-    console.error("addItemAction fatal failure:", error);
-    return { success: false, error: "Internal server error" };
+    console.error("addItemAction failure:", error);
+    return { success: false };
   }
 }
 
 export async function toggleItemAction(id: string, isChecked: boolean) {
-  await prisma.item.update({
-    where: { id },
-    data: { isChecked },
-  });
+  await prisma.item.update({ where: { id }, data: { isChecked } });
   broadcastUpdate();
 }
 
 export async function moveItemAction(id: string, type: ItemType, categoryId: string | null = null) {
-  await prisma.item.update({
-    where: { id },
-    data: { type, categoryId },
-  });
-  await cleanupEmptyCategories();
-  broadcastUpdate();
-}
-
-export async function renameCategoryAction(id: string, name: string) {
-  await prisma.category.update({
-    where: { id },
-    data: { name },
-  });
+  await prisma.item.update({ where: { id }, data: { type, categoryId } });
   broadcastUpdate();
 }
 
 export async function clearCheckedAction(type: ItemType) {
-  await prisma.item.deleteMany({
-    where: { type, isChecked: true },
-  });
-  await cleanupEmptyCategories();
+  await prisma.item.deleteMany({ where: { type, isChecked: true } });
   broadcastUpdate();
 }
 
 export async function deleteItemAction(id: string) {
-  await prisma.item.deleteMany({
-    where: { id },
-  });
-  await cleanupEmptyCategories();
+  await prisma.item.deleteMany({ where: { id } });
   broadcastUpdate();
-}
-
-async function cleanupEmptyCategories() {
-  try {
-    const emptyCategories = await prisma.category.findMany({
-      where: {
-        items: { none: {} },
-        children: { none: {} },
-      },
-    });
-
-    if (emptyCategories.length > 0) {
-      for (const cat of emptyCategories) {
-        const count = await prisma.item.count({ where: { categoryId: cat.id } });
-        const subCount = await prisma.category.count({ where: { parentId: cat.id } });
-        if (count === 0 && subCount === 0) {
-          await prisma.category.deleteMany({ where: { id: cat.id } });
-        }
-      }
-      await cleanupEmptyCategories();
-    }
-  } catch (err) {
-    console.error("Cleanup error:", err);
-  }
 }
 
 export async function getAppData() {
   const [items, categories] = await Promise.all([
-    prisma.item.findMany({
-      orderBy: [{ isChecked: "asc" }, { order: "asc" }, { createdAt: "desc" }],
-    }),
-    prisma.category.findMany({
-      orderBy: { order: "asc" },
-    }),
+    prisma.item.findMany({ orderBy: [{ isChecked: "asc" }, { createdAt: "desc" }] }),
+    prisma.category.findMany({ orderBy: { name: "asc" } }),
   ]);
   return { items, categories };
-}
-
-export async function deleteCategoryAction(id: string) {
-  await prisma.$transaction([
-    prisma.item.updateMany({ where: { categoryId: id }, data: { categoryId: null } }),
-    prisma.category.updateMany({ where: { parentId: id }, data: { parentId: null } }),
-    prisma.category.deleteMany({ where: { id } }),
-  ]);
-  broadcastUpdate();
 }

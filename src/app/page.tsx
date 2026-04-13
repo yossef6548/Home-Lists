@@ -8,9 +8,7 @@ import {
   toggleItemAction, 
   clearCheckedAction, 
   deleteItemAction,
-  moveItemAction,
-  renameCategoryAction,
-  deleteCategoryAction
+  moveItemAction
 } from "./actions";
 import { Item, Category, ItemType } from "@prisma/client";
 import { useSSE } from "@/hooks/useSSE";
@@ -51,6 +49,7 @@ export default function Home() {
     setIsAdding(true);
     setInputValue("");
     
+    // Optimistic Update
     const tempId = Math.random().toString();
     mutate("app-data", {
       ...data,
@@ -61,7 +60,6 @@ export default function Home() {
       await addItemAction(text);
       refresh();
     } catch (err) {
-      console.error(err);
       refresh();
     } finally {
       setIsAdding(false);
@@ -78,6 +76,7 @@ export default function Home() {
   }, [data, mutate, refresh]);
 
   const handleDelete = useCallback(async (id: string) => {
+    if (!confirm("למחוק את הפריט?")) return;
     mutate("app-data", {
       ...data,
       items: data?.items.filter((i: Item) => i.id !== id)
@@ -92,64 +91,68 @@ export default function Home() {
   }, [refresh]);
 
   return (
-    <main className="min-h-screen bg-gray-50 dark:bg-zinc-950 text-gray-900 dark:text-zinc-100 transition-colors duration-200 pb-20">
-      <div className="max-w-2xl mx-auto px-4 py-8">
-        <h1 className="text-4xl font-black text-center mb-8 tracking-tight text-blue-600 dark:text-blue-500">
+    <main className="min-h-screen bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-100 transition-colors duration-200 pb-10">
+      <div className="max-w-md mx-auto px-3 py-6">
+        <h1 className="text-2xl font-black text-center mb-6 tracking-tight text-blue-600 dark:text-blue-500 italic">
           Home Lists
         </h1>
         
+        {/* Input Bar */}
         <form onSubmit={handleAddItem} className="mb-4 flex gap-2">
           <input
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             placeholder="מה להוסיף?"
-            className="flex-1 p-4 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-800 rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+            className="flex-1 p-3 bg-zinc-100 dark:bg-zinc-900 border-none rounded-xl shadow-inner focus:ring-2 focus:ring-blue-500/20 transition-all text-base"
             disabled={isAdding}
           />
           <button
             type="submit"
-            className="bg-blue-600 text-white px-8 py-4 rounded-xl font-bold shadow-lg shadow-blue-500/20 hover:bg-blue-700 active:scale-95 disabled:bg-blue-400 transition-all"
+            className="bg-blue-600 text-white px-5 py-3 rounded-xl font-black shadow-lg shadow-blue-500/20 hover:bg-blue-700 active:scale-95 disabled:bg-zinc-400 transition-all text-sm"
             disabled={isAdding}
           >
-            {isAdding ? "מוסיף..." : "הוסף"}
+            {isAdding ? "..." : "הוסף"}
           </button>
         </form>
 
-        <div className="min-h-[40px] mb-4 flex flex-col gap-1 px-1">
+        {/* Processing State Section */}
+        <div className="flex flex-col gap-1.5 px-1 mb-6">
           {processingItems.map(item => (
-            <div key={item.id} className="flex items-center gap-2 text-sm font-bold text-blue-500 animate-pulse">
+            <div key={item.id} className="flex items-center gap-2 text-xs font-bold text-blue-500 animate-pulse">
               <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
               <span>{item.name}</span>
             </div>
           ))}
         </div>
 
-        <div className="flex bg-gray-200/50 dark:bg-zinc-900/50 p-1 rounded-xl mb-8">
+        {/* Tab Switcher */}
+        <div className="flex bg-zinc-100 dark:bg-zinc-900 p-1 rounded-xl mb-6 shadow-inner">
           <button
             onClick={() => setTab("TASK")}
-            className={`flex-1 py-3 text-lg font-bold rounded-lg transition-all ${
+            className={`flex-1 py-2 text-sm font-black rounded-lg transition-all ${
               tab === "TASK" 
                 ? "bg-white dark:bg-zinc-800 shadow-sm text-blue-600 dark:text-blue-400" 
-                : "text-gray-500 hover:text-gray-700 dark:hover:text-zinc-300"
+                : "text-zinc-400"
             }`}
           >
             משימות
           </button>
           <button
             onClick={() => setTab("SHOPPING")}
-            className={`flex-1 py-3 text-lg font-bold rounded-lg transition-all ${
+            className={`flex-1 py-2 text-sm font-black rounded-lg transition-all ${
               tab === "SHOPPING" 
                 ? "bg-white dark:bg-zinc-800 shadow-sm text-blue-600 dark:text-blue-400" 
-                : "text-gray-500 hover:text-gray-700 dark:hover:text-zinc-300"
+                : "text-zinc-400"
             }`}
           >
-            רשימת קניות
+            קניות
           </button>
         </div>
 
+        {/* Content Area */}
         {isLoading && !data ? (
-          <div className="text-center py-12 opacity-50 font-bold text-xl">טוען...</div>
+          <div className="text-center py-10 opacity-20 font-black text-xs tracking-widest uppercase">Loading</div>
         ) : (
           <div className="space-y-4">
             {tab === "TASK" ? (
@@ -158,8 +161,10 @@ export default function Home() {
                 categories={data?.categories || []}
                 onToggle={handleToggle} 
                 onClear={async () => {
-                  await clearCheckedAction("TASK");
-                  refresh();
+                  if (confirm("לנקות את כל המשימות שהושלמו?")) {
+                    await clearCheckedAction("TASK");
+                    refresh();
+                  }
                 }}
                 onDelete={handleDelete}
                 onMove={handleMoveItem}
@@ -170,8 +175,10 @@ export default function Home() {
                 categories={data?.categories || []}
                 onToggle={handleToggle}
                 onClear={async () => {
-                  await clearCheckedAction("SHOPPING");
-                  refresh();
+                  if (confirm("לנקות את כל הפריטים שנקנו?")) {
+                    await clearCheckedAction("SHOPPING");
+                    refresh();
+                  }
                 }}
                 onDelete={handleDelete}
                 onMove={handleMoveItem}
@@ -202,21 +209,21 @@ const TaskList = memo(({ items, categories, onToggle, onClear, onDelete, onMove 
           <ItemRow key={item.id} item={item} categories={categories} onToggle={onToggle} onDelete={onDelete} onMove={onMove} />
         ))}
         {activeItems.length === 0 && (
-          <div className="text-center py-12 text-gray-400 dark:text-zinc-600 bg-white/50 dark:bg-zinc-900/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-zinc-800 font-bold">
-            אין משימות פעילות
+          <div className="text-center py-10 text-zinc-300 dark:text-zinc-700 bg-zinc-50/50 dark:bg-zinc-900/30 rounded-2xl border-2 border-dashed border-zinc-100 dark:border-zinc-900 font-bold text-xs">
+            אין משימות
           </div>
         )}
       </div>
       
       {checkedItems.length > 0 && (
-        <div className="mt-8 border-t border-gray-200 dark:border-zinc-800 pt-6">
+        <div className="mt-8 border-t border-zinc-100 dark:border-zinc-900 pt-6">
           <button 
             onClick={onClear}
-            className="w-full py-3 text-sm font-bold text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors mb-6"
+            className="w-full py-2 text-xs font-black text-zinc-400 dark:text-zinc-500 border border-zinc-100 dark:border-zinc-900 rounded-lg hover:bg-red-50 transition-all mb-4"
           >
-            נקה פריטים שסומנו
+            נקה משימות שהושלמו
           </button>
-          <div className="space-y-2 opacity-60">
+          <div className="space-y-2 opacity-40 grayscale">
             {checkedItems.map(item => (
               <ItemRow key={item.id} item={item} categories={categories} onToggle={onToggle} onDelete={onDelete} onMove={onMove} />
             ))}
@@ -235,66 +242,55 @@ const ItemRow = memo(({ item, categories, onToggle, onDelete, onMove }: {
   onMove: (id: string, type: ItemType, categoryId: string | null) => void
 }) => {
   const [showMoveMenu, setShowMoveMenu] = useState(false);
+  const topLevelCategories = useMemo(() => categories.filter(c => !c.parentId), [categories]);
 
   return (
-    <div className="flex flex-col gap-2 p-4 bg-white dark:bg-zinc-900 rounded-xl shadow-sm border border-gray-100 dark:border-zinc-800 group transition-all hover:shadow-md relative">
-      <div className="flex items-center gap-4">
+    <div className="flex flex-col bg-white dark:bg-zinc-900 rounded-xl shadow-sm border border-zinc-100 dark:border-zinc-800/50 overflow-hidden">
+      <div className="flex items-center gap-3 p-3">
         <input 
           type="checkbox" 
           checked={item.isChecked}
           onChange={(e) => onToggle(item.id, e.target.checked)}
-          className="w-6 h-6 rounded-lg border-gray-300 dark:border-zinc-700 text-blue-600 focus:ring-blue-500 transition-all cursor-pointer"
+          className="w-5 h-5 rounded-md border-2 border-zinc-200 dark:border-zinc-700 text-blue-600 focus:ring-0 appearance-none checked:bg-blue-600 checked:border-blue-600"
         />
-        <span className={`flex-1 text-lg ${item.isChecked ? "line-through text-gray-400 dark:text-zinc-600" : "font-bold"}`}>
+        
+        <span className={`flex-1 text-sm ${item.isChecked ? "line-through text-zinc-300 dark:text-zinc-700" : "font-bold text-zinc-800 dark:text-zinc-200"}`}>
           {item.name}
         </span>
         
-        <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-all">
+        <div className="flex gap-1">
           <button 
             onClick={() => setShowMoveMenu(!showMoveMenu)}
-            className="text-gray-400 hover:text-blue-500 p-2"
-            title="העבר לרשימה אחרת"
+            className="text-zinc-400 p-2 active:bg-zinc-100 dark:active:bg-zinc-800 rounded-lg"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M16 21h5v-5"/><path d="M8 21H3v-5"/><path d="m15 15 6 6"/><path d="m9 9-6-6"/><path d="m21 3-6 6"/><path d="m3 21 6-6"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M16 3h5v5"/><path d="M8 3H3v5"/><path d="M16 21h5v-5"/><path d="M8 21H3v-5"/><path d="m15 15 6 6"/><path d="m9 9-6-6"/><path d="m21 3-6 6"/><path d="m3 21 6-6"/></svg>
           </button>
           <button 
             onClick={() => onDelete(item.id)}
-            className="text-gray-400 hover:text-red-500 p-2"
+            className="text-zinc-400 p-2 active:bg-red-50 dark:active:bg-red-900/20 rounded-lg"
           >
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
           </button>
         </div>
       </div>
 
       {showMoveMenu && (
-        <div className="mt-3 p-3 bg-gray-50 dark:bg-zinc-800 rounded-lg border border-gray-200 dark:border-zinc-700 grid grid-cols-2 gap-2 text-sm">
+        <div className="p-2 bg-zinc-50 dark:bg-zinc-800/50 border-t border-zinc-100 dark:border-zinc-800 flex flex-wrap gap-1">
           <button 
             onClick={() => { onMove(item.id, "TASK", null); setShowMoveMenu(false); }}
-            className="p-2 bg-white dark:bg-zinc-900 rounded border hover:border-blue-500 font-bold"
+            className="px-2 py-1.5 bg-white dark:bg-zinc-900 rounded border border-zinc-200 dark:border-zinc-700 font-bold text-[10px]"
           >
             משימות
           </button>
-          {categories.filter(c => !c.parentId).map(cat => (
+          {topLevelCategories.map(cat => (
             <button 
               key={cat.id}
               onClick={() => { onMove(item.id, "SHOPPING", cat.id); setShowMoveMenu(false); }}
-              className="p-2 bg-white dark:bg-zinc-900 rounded border hover:border-blue-500 font-bold truncate"
+              className="px-2 py-1.5 bg-white dark:bg-zinc-900 rounded border border-zinc-200 dark:border-zinc-700 font-bold text-[10px]"
             >
               {cat.name}
             </button>
           ))}
-          <button 
-            onClick={() => {
-              const name = prompt("שם קטגוריה חדשה:");
-              if (name) {
-                // Ideally create category then move, but simplified for now
-                alert("אנא הוסף את הקטגוריה ידנית או דרך ה-AI");
-              }
-            }}
-            className="p-2 bg-white dark:bg-zinc-900 rounded border border-dashed hover:border-blue-500 font-bold"
-          >
-            + קטגוריה
-          </button>
         </div>
       )}
     </div>
@@ -310,12 +306,22 @@ const ShoppingList = memo(({ items, categories, onToggle, onClear, onDelete, onM
   onMove: (id: string, type: ItemType, categoryId: string | null) => void
 }) => {
   const topLevelCategories = useMemo(() => categories.filter(c => !c.parentId), [categories]);
+  
+  const categoriesWithItems = useMemo(() => {
+    return topLevelCategories.filter(cat => {
+      const hasDirectItems = items.some(i => i.categoryId === cat.id && !i.isChecked);
+      const subCats = categories.filter(sub => sub.parentId === cat.id);
+      const hasSubItems = subCats.some(sub => items.some(i => i.categoryId === sub.id && !i.isChecked));
+      return hasDirectItems || hasSubItems;
+    });
+  }, [topLevelCategories, items, categories]);
+
   const uncategorizedItems = useMemo(() => items.filter(i => !i.categoryId), [items]);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <div className="space-y-6">
-        {topLevelCategories.map(cat => (
+        {categoriesWithItems.map(cat => (
           <CategoryView 
             key={cat.id} 
             category={cat} 
@@ -328,8 +334,8 @@ const ShoppingList = memo(({ items, categories, onToggle, onClear, onDelete, onM
         ))}
         
         {uncategorizedItems.some(i => !i.isChecked) && (
-          <div className="space-y-3">
-            <h3 className="text-xs font-black text-gray-400 dark:text-zinc-600 uppercase tracking-widest px-1">ללא קטגוריה</h3>
+          <div className="space-y-2">
+            <h3 className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-1">כללי</h3>
             <div className="space-y-2">
               {uncategorizedItems.filter(i => !i.isChecked).map(item => (
                 <ItemRow key={item.id} item={item} categories={categories} onToggle={onToggle} onDelete={onDelete} onMove={onMove} />
@@ -338,22 +344,22 @@ const ShoppingList = memo(({ items, categories, onToggle, onClear, onDelete, onM
           </div>
         )}
 
-        {topLevelCategories.length === 0 && uncategorizedItems.length === 0 && (
-          <div className="text-center py-12 text-gray-400 dark:text-zinc-600 bg-white/50 dark:bg-zinc-900/50 rounded-2xl border-2 border-dashed border-gray-200 dark:border-zinc-800 font-bold">
-            רשימת הקניות ריקה
+        {categoriesWithItems.length === 0 && uncategorizedItems.filter(i => !i.isChecked).length === 0 && (
+          <div className="text-center py-10 text-zinc-300 dark:text-zinc-700 bg-zinc-50/50 dark:bg-zinc-900/30 rounded-2xl border-2 border-dashed border-zinc-100 dark:border-zinc-900 font-bold text-xs">
+            רשימה ריקה
           </div>
         )}
       </div>
 
       {items.some(i => i.isChecked) && (
-        <div className="mt-12 border-t border-gray-200 dark:border-zinc-800 pt-8">
+        <div className="mt-8 border-t border-zinc-100 dark:border-zinc-900 pt-6">
           <button 
             onClick={onClear}
-            className="w-full py-3 text-sm font-bold text-red-600 dark:text-red-400 border border-red-200 dark:border-red-900/50 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors mb-6"
+            className="w-full py-2 text-xs font-black text-zinc-400 dark:text-zinc-500 border border-zinc-100 dark:border-zinc-900 rounded-lg hover:bg-red-50 transition-all mb-4"
           >
-            נקה פריטים שסומנו
+            נקה פריטים שנקנו
           </button>
-          <div className="space-y-2 opacity-60">
+          <div className="space-y-2 opacity-40 grayscale">
             {items.filter(i => i.isChecked).map(item => (
               <ItemRow key={item.id} item={item} categories={categories} onToggle={onToggle} onDelete={onDelete} onMove={onMove} />
             ))}
@@ -375,48 +381,29 @@ const CategoryView = memo(({ category, allCategories, allItems, onToggle, onDele
   const subCategories = useMemo(() => allCategories.filter(c => c.parentId === category.id), [allCategories, category.id]);
   const items = useMemo(() => allItems.filter(i => i.categoryId === category.id && !i.isChecked), [allItems, category.id]);
 
+  const visibleSubCategories = useMemo(() => {
+    return subCategories.filter(sub => {
+      const hasDirectItems = allItems.some(i => i.categoryId === sub.id && !i.isChecked);
+      return hasDirectItems;
+    });
+  }, [subCategories, allItems]);
+
+  if (items.length === 0 && visibleSubCategories.length === 0) return null;
+
   return (
-    <div className="space-y-3 border-r-4 border-blue-100 dark:border-blue-900/30 pr-4 py-1">
-      <div className="flex items-center justify-between group">
-        <h3 className="text-xl font-black text-gray-800 dark:text-zinc-200">{category.name}</h3>
-        <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
-          <button 
-            onClick={async () => {
-              const newName = prompt("שם קטגוריה חדש:", category.name);
-              if (newName && newName !== category.name) {
-                await renameCategoryAction(category.id, newName);
-              }
-            }}
-            className="text-xs font-bold text-blue-500 hover:text-blue-700"
-          >
-            ערוך
-          </button>
-          <button 
-            onClick={async () => {
-              if (confirm(`האם למחוק את הקטגוריה "${category.name}"?`)) {
-                await deleteCategoryAction(category.id);
-              }
-            }}
-            className="text-xs font-bold text-red-400 hover:text-red-600"
-          >
-            מחק
-          </button>
-        </div>
-      </div>
+    <div className="space-y-3 border-r-4 border-blue-500/10 pr-3">
+      <h3 className="text-base font-black text-zinc-800 dark:text-zinc-100 tracking-tight">{category.name}</h3>
       <div className="space-y-2">
         {items.map(item => (
           <ItemRow key={item.id} item={item} categories={allCategories} onToggle={onToggle} onDelete={onDelete} onMove={onMove} />
         ))}
-        {subCategories.map(sub => (
-          <CategoryView 
-            key={sub.id} 
-            category={sub} 
-            allCategories={allCategories} 
-            allItems={allItems} 
-            onToggle={onToggle}
-            onDelete={onDelete}
-            onMove={onMove}
-          />
+        {visibleSubCategories.map(sub => (
+          <div key={sub.id} className="space-y-2 pt-1">
+            <h4 className="text-[10px] font-black text-blue-500/60 uppercase tracking-widest px-1">{sub.name}</h4>
+            {allItems.filter(i => i.categoryId === sub.id && !i.isChecked).map(item => (
+              <ItemRow key={item.id} item={item} categories={allCategories} onToggle={onToggle} onDelete={onDelete} onMove={onMove} />
+            ))}
+          </div>
         ))}
       </div>
     </div>
