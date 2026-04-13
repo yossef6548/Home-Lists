@@ -13,81 +13,101 @@ export interface AIResponse {
   items: AIItem[];
 }
 
-// קריאה דינמית מהקונפיגורציה
 export function getFixedHierarchy(): Record<string, string[]> {
   try {
     const configPath = path.join(process.cwd(), "categories.json");
     const content = fs.readFileSync(configPath, "utf-8");
     return JSON.parse(content);
   } catch (err) {
-    console.error("Failed to load categories.json, using fallback", err);
     return { "אחר": ["כללי"] };
   }
 }
 
-let categoryCache: any = null;
-let lastCacheUpdate = 0;
-const CACHE_TTL = 30000;
+// Normalization map for common AI hallucinations
+const CATEGORY_MAP: Record<string, string> = {
+  "SUPERMARKET": "סופרמרקט",
+  "Supermarket": "סופרמרקט",
+  "PHARM": "פארם",
+  "Pharm": "פארם",
+  "ELECTRONICS": "אלקטרוניקה",
+  "Electronics": "אלקטרוניקה",
+  "TAMBOUR": "טמבור",
+  "Tambour": "טמבור",
+  "HOME": "לבית",
+  "Home": "לבית"
+};
 
-export function clearCategoryCache() {
-  categoryCache = null;
-  lastCacheUpdate = 0;
-}
+export function clearCategoryCache() {}
 
 export async function processWithAI(text: string): Promise<AIResponse> {
   const hierarchy = getFixedHierarchy();
   
-  const systemPrompt = `אתה עוזר חכם לניהול רשימות. עליך לנתח את הטקסט ולפצל אותו לפריטים.
-לכל פריט קניה, עליך לבחור את הקטגוריה והתת-קטגוריה המתאימים ביותר מהרשימה הסגורה בלבד.
+  const systemPrompt = `You are a professional list manager. 
+Categorize items into this FIXED HEBREW HIERARCHY.
 
-רשימת קטגוריות מותרת (חנות -> מחלקות):
-${Object.entries(hierarchy).map(([store, divs]) => `- ${store}: ${divs.join(", ")}`).join("\n")}
+HIERARCHY:
+${JSON.stringify(hierarchy, null, 2)}
 
-חוקים נוקשים:
-- החזר אך ורק JSON תקין.
-- אין להמציא קטגוריות חדשות. השתמש רק בקיימות.
-- ניסוח: עברית קצרה ותקנית. אל תשמיט אותיות.
+STRICT RULES:
+1. "parentCategoryName" MUST be the Hebrew store name (e.g. "סופרמרקט").
+2. "categoryName" MUST be the Hebrew division name (e.g. "חלבי וביצים").
+3. DO NOT USE ENGLISH names like "SUPERMARKET".
+4. Translate items to concise Hebrew (e.g. "milk" -> "חלב").
+
+JSON FORMAT:
+{"items": [{"type": "TASK"|"SHOPPING", "parentCategoryName": "Hebrew Store", "categoryName": "Hebrew Division", "itemName": "Hebrew Name"}]}
 `;
 
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 120000);
-
     const response = await fetch(`${process.env.OLLAMA_URL}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "llama3.1:8b", 
+        model: "qwen2.5:7b-instruct", 
         system: systemPrompt,
-        prompt: `נתח ופצל לעברית: "${text}"`,
+        prompt: `Categorize: "${text}"`,
         stream: false,
         format: "json",
         options: { temperature: 0 }
       }),
-      signal: controller.signal
     });
 
-    clearTimeout(timeoutId);
+    if (!response.ok) throw new Error("AI request failed");
+
     const data = await response.json();
     let rawResponse = data.response || "";
+    
+    process.stdout.write(`\n[AI DEBUG] INPUT: ${text} | RAW: ${rawResponse}\n`);
+
     const jsonMatch = rawResponse.match(/\{[\s\S]*\}/);
     if (jsonMatch) rawResponse = jsonMatch[0];
 
     const parsed = JSON.parse(rawResponse);
-    const items = Array.isArray(parsed.items) ? parsed.items : [parsed];
+    let rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : (Array.isArray(parsed) ? parsed : [parsed]);
 
-    return { items: items.filter((i: any) => i && i.itemName) };
+    const finalized = rawItems.filter((i: any) => i && (i.itemName || i.name)).map(i => {
+      let store = i.parentCategoryName || i.storeName || "";
+      let division = i.categoryName || i.divisionName || "";
+      
+      // Apply normalization
+      if (CATEGORY_MAP[store]) store = CATEGORY_MAP[store];
+      
+      return {
+        type: (i.type || "TASK").toUpperCase() as any,
+        itemName: i.itemName || i.name,
+        categoryName: division,
+        parentCategoryName: store
+      };
+    });
+
+    return { items: finalized };
   } catch (err) {
-    console.error("[AI ERROR]", err);
+    process.stdout.write(`[AI ERROR] ${err}\n`);
     return { items: [] }; 
   }
 }
 
-// פונקציה חדשה לסיווג פריט בודד (למשל במעבר ממשימה לקנייה)
 export async function categorizeSingleItem(itemName: string): Promise<AIItem | null> {
   const res = await processWithAI(itemName);
-  if (res.items && res.items.length > 0) {
-    return res.items[0];
-  }
-  return null;
+  return res.items.length > 0 ? res.items[0] : null;
 }

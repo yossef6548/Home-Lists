@@ -4,10 +4,10 @@ import prisma from "@/lib/prisma";
 import { processWithAI, getFixedHierarchy, categorizeSingleItem, clearCategoryCache } from "@/lib/ai";
 import { broadcastUpdate } from "@/lib/events";
 import { ItemType } from "@prisma/client";
+import { revalidatePath } from "next/cache";
 
 let aiProcessingQueue = Promise.resolve();
 
-// Ensures the hierarchy from JSON exists in the database
 export async function ensureStaticHierarchy() {
   const hierarchy = getFixedHierarchy();
   for (const [storeName, divisions] of Object.entries(hierarchy)) {
@@ -31,11 +31,13 @@ export async function addItemAction(rawText: string) {
     const placeholder = await prisma.item.create({
       data: { name: `🔄 מעבד: ${rawText}`, type: "TASK" },
     });
+    revalidatePath("/");
     broadcastUpdate();
 
     aiProcessingQueue = aiProcessingQueue.then(async () => {
       try {
         const aiResponse = await processWithAI(rawText);
+        
         await prisma.$transaction(async (tx) => {
           for (const aiResult of aiResponse.items) {
             let categoryId: string | null = null;
@@ -47,50 +49,57 @@ export async function addItemAction(rawText: string) {
               }
             }
             await tx.item.create({
-              data: { name: aiResult.itemName, type: aiResult.type as ItemType, categoryId },
+              data: { 
+                name: aiResult.itemName, 
+                type: aiResult.type as ItemType, 
+                categoryId 
+              },
             });
           }
           await tx.item.deleteMany({ where: { id: placeholder.id } });
         });
+        revalidatePath("/");
         broadcastUpdate();
       } catch (error) {
-        console.error("[QUEUE ERROR]", error);
+        process.stderr.write(`[QUEUE ERROR] ${error}\n`);
         await prisma.item.updateMany({
           where: { id: placeholder.id },
           data: { name: rawText },
         });
+        revalidatePath("/");
         broadcastUpdate();
       }
     });
     return { success: true };
   } catch (error) {
-    console.error("addItemAction failure:", error);
     return { success: false };
   }
 }
 
 export async function renameItemAction(id: string, newName: string) {
   await prisma.item.update({ where: { id }, data: { name: newName } });
+  revalidatePath("/");
   broadcastUpdate();
 }
 
 export async function toggleItemAction(id: string, isChecked: boolean) {
   await prisma.item.update({ where: { id }, data: { isChecked } });
+  revalidatePath("/");
   broadcastUpdate();
 }
 
 export async function moveItemAction(id: string, type: ItemType, categoryId: string | null = null) {
   await prisma.item.update({ where: { id }, data: { type, categoryId } });
+  revalidatePath("/");
   broadcastUpdate();
 }
 
-// Special move for tasks: Auto-categorize with AI
 export async function moveTaskToShoppingAction(id: string) {
   const item = await prisma.item.findUnique({ where: { id } });
   if (!item) return;
 
-  // Optimistically set to shopping in "Other"
   await prisma.item.update({ where: { id }, data: { type: "SHOPPING", name: `🔄 מסווג: ${item.name}` } });
+  revalidatePath("/");
   broadcastUpdate();
 
   aiProcessingQueue = aiProcessingQueue.then(async () => {
@@ -110,9 +119,11 @@ export async function moveTaskToShoppingAction(id: string) {
       } else {
         await prisma.item.update({ where: { id }, data: { name: item.name } });
       }
+      revalidatePath("/");
       broadcastUpdate();
     } catch (err) {
       await prisma.item.update({ where: { id }, data: { name: item.name } });
+      revalidatePath("/");
       broadcastUpdate();
     }
   });
@@ -120,11 +131,13 @@ export async function moveTaskToShoppingAction(id: string) {
 
 export async function clearCheckedAction(type: ItemType) {
   await prisma.item.deleteMany({ where: { type, isChecked: true } });
+  revalidatePath("/");
   broadcastUpdate();
 }
 
 export async function deleteItemAction(id: string) {
   await prisma.item.deleteMany({ where: { id } });
+  revalidatePath("/");
   broadcastUpdate();
 }
 
@@ -143,5 +156,6 @@ export async function resetDatabaseFromConfig() {
   ]);
   clearCategoryCache();
   await ensureStaticHierarchy();
+  revalidatePath("/");
   broadcastUpdate();
 }

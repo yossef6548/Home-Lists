@@ -21,7 +21,7 @@ export default function Home() {
   const { mutate } = useSWRConfig();
   const { data, isLoading } = useSWR("app-data", fetcher, {
     revalidateOnFocus: true,
-    refreshInterval: 60000, 
+    refreshInterval: 30000, 
   });
 
   const [tab, setTab] = useState<ItemType>("TASK");
@@ -373,7 +373,7 @@ const ShoppingList = memo(({ items, categories, onToggle, onClear, onDelete, onR
     });
   }, [topLevelCategories, items, categories]);
 
-  const uncategorizedItems = useMemo(() => items.filter(i => !i.categoryId), [items]);
+  const uncategorizedItems = useMemo(() => items.filter(i => i.type === "SHOPPING" && !i.categoryId), [items]);
 
   return (
     <div className="space-y-8">
@@ -391,7 +391,7 @@ const ShoppingList = memo(({ items, categories, onToggle, onClear, onDelete, onR
           />
         ))}
         
-        {uncategorizedItems.some(i => !i.isChecked) && (activeItems => (
+        {uncategorizedItems.some(i => !i.isChecked) && (
           <div className="space-y-3">
             <h3 className="text-[10px] font-black text-zinc-400 uppercase tracking-widest px-2">כללי</h3>
             <div className="space-y-2">
@@ -400,7 +400,7 @@ const ShoppingList = memo(({ items, categories, onToggle, onClear, onDelete, onR
               ))}
             </div>
           </div>
-        ))(uncategorizedItems)}
+        )}
 
         {categoriesWithItems.length === 0 && uncategorizedItems.filter(i => !i.isChecked).length === 0 && (
           <div className="text-center py-16 text-zinc-300 dark:text-zinc-700 bg-zinc-50/50 dark:bg-zinc-900/30 rounded-3xl border-2 border-dashed border-zinc-100 dark:border-zinc-900 font-bold text-xs">
