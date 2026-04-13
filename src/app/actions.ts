@@ -6,7 +6,14 @@ import { broadcastUpdate } from "@/lib/events";
 import { ItemType } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 
-let aiProcessingQueue = Promise.resolve();
+// Global queue for background processing
+declare global {
+  var aiProcessingQueue: Promise<void> | undefined;
+}
+
+if (!globalThis.aiProcessingQueue) {
+  globalThis.aiProcessingQueue = Promise.resolve();
+}
 
 export async function ensureStaticHierarchy() {
   const hierarchy = getFixedHierarchy();
@@ -28,26 +35,37 @@ export async function ensureStaticHierarchy() {
 export async function addItemAction(rawText: string) {
   try {
     await ensureStaticHierarchy();
+    
+    // 1. Create placeholder immediately for instant UI feedback
     const placeholder = await prisma.item.create({
       data: { name: `🔄 מעבד: ${rawText}`, type: "TASK" },
     });
+    
     revalidatePath("/");
     broadcastUpdate();
 
-    aiProcessingQueue = aiProcessingQueue.then(async () => {
+    // 2. Run AI in the background WITHOUT 'await' so the user doesn't wait
+    const processingTask = async () => {
       try {
         const aiResponse = await processWithAI(rawText);
         
         await prisma.$transaction(async (tx) => {
           for (const aiResult of aiResponse.items) {
             let categoryId: string | null = null;
+
             if (aiResult.type === "SHOPPING") {
-              const store = await tx.category.findFirst({ where: { name: aiResult.parentCategoryName, parentId: null } });
+              // Exact Hebrew matching from the static config
+              const store = await tx.category.findFirst({ 
+                where: { name: aiResult.parentCategoryName, parentId: null } 
+              });
               if (store) {
-                const division = await tx.category.findFirst({ where: { name: aiResult.categoryName, parentId: store.id } });
+                const division = await tx.category.findFirst({ 
+                  where: { name: aiResult.categoryName, parentId: store.id } 
+                });
                 categoryId = division ? division.id : store.id;
               }
             }
+
             await tx.item.create({
               data: { 
                 name: aiResult.itemName, 
@@ -56,20 +74,24 @@ export async function addItemAction(rawText: string) {
               },
             });
           }
+          // 3. Cleanup placeholder
           await tx.item.deleteMany({ where: { id: placeholder.id } });
         });
-        revalidatePath("/");
-        broadcastUpdate();
       } catch (error) {
-        process.stderr.write(`[QUEUE ERROR] ${error}\n`);
+        process.stderr.write(`[AI BACKGROUND ERROR] ${error}\n`);
         await prisma.item.updateMany({
           where: { id: placeholder.id },
           data: { name: rawText },
         });
+      } finally {
         revalidatePath("/");
         broadcastUpdate();
       }
-    });
+    };
+
+    // Chain to the global queue but DO NOT await it here
+    globalThis.aiProcessingQueue = globalThis.aiProcessingQueue!.then(processingTask).catch(() => {});
+
     return { success: true };
   } catch (error) {
     return { success: false };
@@ -98,13 +120,14 @@ export async function moveTaskToShoppingAction(id: string) {
   const item = await prisma.item.findUnique({ where: { id } });
   if (!item) return;
 
+  const originalName = item.name;
   await prisma.item.update({ where: { id }, data: { type: "SHOPPING", name: `🔄 מסווג: ${item.name}` } });
   revalidatePath("/");
   broadcastUpdate();
 
-  aiProcessingQueue = aiProcessingQueue.then(async () => {
+  const processingTask = async () => {
     try {
-      const aiResult = await categorizeSingleItem(item.name);
+      const aiResult = await categorizeSingleItem(originalName);
       if (aiResult) {
         let categoryId: string | null = null;
         const store = await prisma.category.findFirst({ where: { name: aiResult.parentCategoryName, parentId: null } });
@@ -117,16 +140,17 @@ export async function moveTaskToShoppingAction(id: string) {
           data: { name: aiResult.itemName, categoryId }
         });
       } else {
-        await prisma.item.update({ where: { id }, data: { name: item.name } });
+        await prisma.item.update({ where: { id }, data: { name: originalName } });
       }
-      revalidatePath("/");
-      broadcastUpdate();
     } catch (err) {
-      await prisma.item.update({ where: { id }, data: { name: item.name } });
+      await prisma.item.update({ where: { id }, data: { name: originalName } });
+    } finally {
       revalidatePath("/");
       broadcastUpdate();
     }
-  });
+  };
+
+  globalThis.aiProcessingQueue = globalThis.aiProcessingQueue!.then(processingTask).catch(() => {});
 }
 
 export async function clearCheckedAction(type: ItemType) {

@@ -23,39 +23,28 @@ export function getFixedHierarchy(): Record<string, string[]> {
   }
 }
 
-// Normalization map for common AI hallucinations
-const CATEGORY_MAP: Record<string, string> = {
-  "SUPERMARKET": "סופרמרקט",
-  "Supermarket": "סופרמרקט",
-  "PHARM": "פארם",
-  "Pharm": "פארם",
-  "ELECTRONICS": "אלקטרוניקה",
-  "Electronics": "אלקטרוניקה",
-  "TAMBOUR": "טמבור",
-  "Tambour": "טמבור",
-  "HOME": "לבית",
-  "Home": "לבית"
-};
-
 export function clearCategoryCache() {}
 
 export async function processWithAI(text: string): Promise<AIResponse> {
   const hierarchy = getFixedHierarchy();
   
-  const systemPrompt = `You are a professional list manager. 
-Categorize items into this FIXED HEBREW HIERARCHY.
+  const systemPrompt = `אתה עוזר חכם לניהול רשימות. עליך לבצע את הפעולות הבאות צעד אחר צעד:
 
-HIERARCHY:
-${JSON.stringify(hierarchy, null, 2)}
+1. **Understand**: הבן את כוונת המשתמש בטקסט.
+2. **Analyze**: זהה את כל הבקשות השונות בטקסט (פצל "X וגם Y" ל-2 פריטים).
+3. **Isolate**: הפרד בין מטלות (TASK - פעולות כמו לשטוף, לתקן) לבין קניות (SHOPPING - שמות עצם כמו חלב, לחם). פריט בודד כמו "מחשב" הוא תמיד SHOPPING.
+4. **Locate**: עבור כל פריט SHOPPING, מצא את ה-"חנות" וה-"מחלקה" המתאימים ביותר אך ורק מתוך הרשימה למטה.
 
-STRICT RULES:
-1. "parentCategoryName" MUST be the Hebrew store name (e.g. "סופרמרקט").
-2. "categoryName" MUST be the Hebrew division name (e.g. "חלבי וביצים").
-3. DO NOT USE ENGLISH names like "SUPERMARKET".
-4. Translate items to concise Hebrew (e.g. "milk" -> "חלב").
+היררכיה מותרת (חנות -> מחלקות):
+${Object.entries(hierarchy).map(([store, divs]) => `- ${store}: ${divs.join(", ")}`).join("\n")}
+
+חוקים נוקשים:
+- אל תשמיט אותיות! לחם = "לחם" (לא "חם"), לשטוף = "לשטוף" (לא "שטוף").
+- החזר אך ורק JSON תקין.
+- השתמש בשמות הקטגוריות בדיוק כפי שהם מופיעים למעלה (בעברית).
 
 JSON FORMAT:
-{"items": [{"type": "TASK"|"SHOPPING", "parentCategoryName": "Hebrew Store", "categoryName": "Hebrew Division", "itemName": "Hebrew Name"}]}
+{"items": [{"type": "TASK"|"SHOPPING", "parentCategoryName": "שם החנות", "categoryName": "שם המחלקה", "itemName": "שם הפריט בעברית"}]}
 `;
 
   try {
@@ -65,7 +54,7 @@ JSON FORMAT:
       body: JSON.stringify({
         model: "qwen2.5:7b-instruct", 
         system: systemPrompt,
-        prompt: `Categorize: "${text}"`,
+        prompt: `נתח את הטקסט הבא: "${text}"`,
         stream: false,
         format: "json",
         options: { temperature: 0 }
@@ -85,24 +74,16 @@ JSON FORMAT:
     const parsed = JSON.parse(rawResponse);
     let rawItems: any[] = Array.isArray(parsed.items) ? parsed.items : (Array.isArray(parsed) ? parsed : [parsed]);
 
-    const finalized = rawItems.filter((i: any) => i && (i.itemName || i.name)).map(i => {
-      let store = i.parentCategoryName || i.storeName || "";
-      let division = i.categoryName || i.divisionName || "";
-      
-      // Apply normalization
-      if (CATEGORY_MAP[store]) store = CATEGORY_MAP[store];
-      
-      return {
-        type: (i.type || "TASK").toUpperCase() as any,
-        itemName: i.itemName || i.name,
-        categoryName: division,
-        parentCategoryName: store
-      };
-    });
+    const finalized = rawItems.filter((i: any) => i && (i.itemName || i.name)).map(i => ({
+      type: (i.type || "TASK").toUpperCase() as any,
+      itemName: i.itemName || i.name,
+      categoryName: i.categoryName || "",
+      parentCategoryName: i.parentCategoryName || ""
+    }));
 
     return { items: finalized };
   } catch (err) {
-    process.stdout.write(`[AI ERROR] ${err}\n`);
+    process.stderr.write(`[AI ERROR] ${err}\n`);
     return { items: [] }; 
   }
 }
