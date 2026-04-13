@@ -52,7 +52,7 @@ JSON FORMAT:
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "qwen2.5:7b-instruct", 
+        model: "qwen2.5:0.5b", 
         system: systemPrompt,
         prompt: `נתח את הטקסט הבא: "${text}"`,
         stream: false,

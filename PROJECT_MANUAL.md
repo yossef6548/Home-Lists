@@ -11,7 +11,7 @@ The primary goal is **Zero-Effort Entry**: A user can type (or dictate via Siri)
 - **Frontend:** Next.js 15 (App Router), Tailwind CSS 4.
 - **Backend:** Next.js Server Actions (stateless logic).
 - **Database:** PostgreSQL via Prisma ORM.
-- **AI Engine:** Ollama running `qwen2.5:7b-instruct` on the host machine.
+- **AI Engine:** Ollama running `qwen2.5:0.5b` on the host machine.
 - **Real-Time Sync:** Server-Sent Events (SSE) via a custom `/api/events` stream and a global `EventEmitter`.
 - **State Management:** `SWR` for optimistic client-side updates and automatic revalidation.
 
@@ -74,7 +74,7 @@ docker exec -it home-lists-db-1 psql -U yossef -d home_lists
 - **Sequential Queueing:** Multiple people can add items at once without crashing the CPU.
 
 ### ⚠️ Needs Polish / Known Quirks
-- **AI Latency:** On CPU-only hardware, AI categorization can take 30-90 seconds. The UI compensates with pulsing status lines.
+- **AI Latency:** AI categorization can take 30-90 seconds. The UI compensates with pulsing status lines.
 - **Strict Matching:** The AI occasionally uses English category names. A normalization mapper in `ai.ts` handles common cases (e.g., "SUPERMARKET" $\rightarrow$ "סופרמרקט"), but new categories in JSON must be added to this mapper if the AI misses them.
 
 ## 7. Instructions for the Next Developer
