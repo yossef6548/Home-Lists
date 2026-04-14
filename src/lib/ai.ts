@@ -27,25 +27,29 @@ export function clearCategoryCache() {}
 
 export async function processWithAI(text: string): Promise<AIResponse> {
   const hierarchy = getFixedHierarchy();
-  
-  const systemPrompt = `אתה עוזר חכם לניהול רשימות. עליך לבצע את הפעולות הבאות צעד אחר צעד:
+  const hierarchyLines = Object.entries(hierarchy)
+    .map(([store, divs]) => `${store}: ${divs.join(", ")}`)
+    .join("\n");
 
-1. **Understand**: הבן את כוונת המשתמש בטקסט.
-2. **Analyze**: זהה את כל הבקשות השונות בטקסט (פצל "X וגם Y" ל-2 פריטים).
-3. **Isolate**: הפרד בין מטלות (TASK - פעולות כמו לשטוף, לתקן) לבין קניות (SHOPPING - שמות עצם כמו חלב, לחם). פריט בודד כמו "מחשב" הוא תמיד SHOPPING.
-4. **Locate**: עבור כל פריט SHOPPING, מצא את ה-"חנות" וה-"מחלקה" המתאימים ביותר אך ורק מתוך הרשימה למטה.
+  const systemPrompt = `You are a smart list assistant. Reply ONLY with valid JSON, no extra text.
 
-היררכיה מותרת (חנות -> מחלקות):
-${Object.entries(hierarchy).map(([store, divs]) => `- ${store}: ${divs.join(", ")}`).join("\n")}
+Rules:
+- Split combined requests ("X and Y") into separate items.
+- type "TASK" = an action/chore (e.g. "לשטוף", "לתקן"). storeName and divisionName = "".
+- type "SHOPPING" = a product to buy. Pick storeName and divisionName from the list below EXACTLY as written.
+- itemName MUST always be the full Hebrew word(s) the user said. Never leave it empty.
+- No backslashes inside string values. No trailing commas.
 
-חוקים נוקשים:
-- אל תשמיט אותיות! לחם = "לחם" (לא "חם"), לשטוף = "לשטוף" (לא "שטוף").
-- החזר אך ורק JSON תקין.
-- השתמש בשמות הקטגוריות בדיוק כפי שהם מופיעים למעלה (בעברית).
+Allowed stores and divisions:
+${hierarchyLines}
 
-JSON FORMAT:
-{"items": [{"type": "TASK"|"SHOPPING", "storeName": "שם החנות", "divisionName": "שם המחלקה", "itemName": "שם הפריט בעברית"}]}
-`;
+Output format (strict):
+{"items":[{"type":"TASK","storeName":"","divisionName":"","itemName":"..."}]}
+{"items":[{"type":"SHOPPING","storeName":"סופרמרקט","divisionName":"חלבי וביצים","itemName":"חלב"}]}
+
+Example:
+User: "חלב ולשטוף כלים"
+Answer: {"items":[{"type":"SHOPPING","storeName":"סופרמרקט","divisionName":"חלבי וביצים","itemName":"חלב"},{"type":"TASK","storeName":"","divisionName":"","itemName":"לשטוף כלים"}]}`;
 
   try {
     const response = await fetch(`${process.env.OLLAMA_URL}/api/generate`, {
@@ -84,7 +88,7 @@ JSON FORMAT:
     return { items: finalized };
   } catch (err) {
     process.stderr.write(`[AI ERROR] ${err}\n`);
-    return { items: [{ type: "TASK", itemName: text, divisionName: "", storeName: "" }] };
+    return { items: [{ type: "TASK", itemName: `⚠️ ${text}`, divisionName: "", storeName: "" }] };
   }
 }
 
