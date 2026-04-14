@@ -56,11 +56,11 @@ export async function addItemAction(rawText: string) {
             if (aiResult.type === "SHOPPING") {
               // Exact Hebrew matching from the static config
               const store = await tx.category.findFirst({ 
-                where: { name: aiResult.parentCategoryName, parentId: null } 
+                where: { name: aiResult.storeName, parentId: null } 
               });
               if (store) {
                 const division = await tx.category.findFirst({ 
-                  where: { name: aiResult.categoryName, parentId: store.id } 
+                  where: { name: aiResult.divisionName, parentId: store.id } 
                 });
                 categoryId = division ? division.id : store.id;
               }
@@ -130,9 +130,9 @@ export async function moveTaskToShoppingAction(id: string) {
       const aiResult = await categorizeSingleItem(originalName);
       if (aiResult) {
         let categoryId: string | null = null;
-        const store = await prisma.category.findFirst({ where: { name: aiResult.parentCategoryName, parentId: null } });
+        const store = await prisma.category.findFirst({ where: { name: aiResult.storeName, parentId: null } });
         if (store) {
-          const division = await prisma.category.findFirst({ where: { name: aiResult.categoryName, parentId: store.id } });
+          const division = await prisma.category.findFirst({ where: { name: aiResult.divisionName, parentId: store.id } });
           categoryId = division ? division.id : store.id;
         }
         await prisma.item.update({

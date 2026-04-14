@@ -4,8 +4,8 @@ import path from "path";
 
 export interface AIItem {
   type: "TASK" | "SHOPPING";
-  categoryName: string; 
-  parentCategoryName: string;
+  divisionName: string; 
+  storeName: string;
   itemName: string;
 }
 
@@ -44,7 +44,7 @@ ${Object.entries(hierarchy).map(([store, divs]) => `- ${store}: ${divs.join(", "
 - השתמש בשמות הקטגוריות בדיוק כפי שהם מופיעים למעלה (בעברית).
 
 JSON FORMAT:
-{"items": [{"type": "TASK"|"SHOPPING", "parentCategoryName": "שם החנות", "categoryName": "שם המחלקה", "itemName": "שם הפריט בעברית"}]}
+{"items": [{"type": "TASK"|"SHOPPING", "storeName": "שם החנות", "divisionName": "שם המחלקה", "itemName": "שם הפריט בעברית"}]}
 `;
 
   try {
@@ -77,8 +77,8 @@ JSON FORMAT:
     const finalized = rawItems.filter((i: any) => i && (i.itemName || i.name)).map(i => ({
       type: (i.type || "TASK").toUpperCase() as any,
       itemName: i.itemName || i.name,
-      categoryName: i.categoryName || "",
-      parentCategoryName: i.parentCategoryName || ""
+      divisionName: i.divisionName || "",
+      storeName: i.storeName || ""
     }));
 
     return { items: finalized };
