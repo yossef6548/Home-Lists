@@ -84,7 +84,7 @@ JSON FORMAT:
     return { items: finalized };
   } catch (err) {
     process.stderr.write(`[AI ERROR] ${err}\n`);
-    return { items: [] }; 
+    return { items: [{ type: "TASK", itemName: text, divisionName: "", storeName: "" }] };
   }
 }
 

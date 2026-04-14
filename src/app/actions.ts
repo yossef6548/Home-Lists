@@ -48,9 +48,12 @@ export async function addItemAction(rawText: string) {
     const processingTask = async () => {
       try {
         const aiResponse = await processWithAI(rawText);
-        
+        const itemsToSave = aiResponse.items.length > 0
+          ? aiResponse.items
+          : [{ type: "TASK" as const, itemName: rawText, divisionName: "", storeName: "" }];
+
         await prisma.$transaction(async (tx) => {
-          for (const aiResult of aiResponse.items) {
+          for (const aiResult of itemsToSave) {
             let categoryId: string | null = null;
 
             if (aiResult.type === "SHOPPING") {
