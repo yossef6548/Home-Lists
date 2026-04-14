@@ -34,11 +34,14 @@ export async function ensureStaticHierarchy() {
 
 export async function addItemAction(rawText: string) {
   try {
+    const cleanedText = rawText.trim();
+    if (!cleanedText) return { success: false };
+
     await ensureStaticHierarchy();
     
     // 1. Create placeholder immediately for instant UI feedback
     const placeholder = await prisma.item.create({
-      data: { name: `🔄 מעבד: ${rawText}`, type: "TASK" },
+      data: { name: `🔄 מעבד: ${cleanedText}`, type: "TASK" },
     });
     
     revalidatePath("/");
@@ -47,10 +50,10 @@ export async function addItemAction(rawText: string) {
     // 2. Run AI in the background WITHOUT 'await' so the user doesn't wait
     const processingTask = async () => {
       try {
-        const aiResponse = await processWithAI(rawText);
+        const aiResponse = await processWithAI(cleanedText);
         const itemsToSave = aiResponse.items.length > 0
           ? aiResponse.items
-          : [{ type: "TASK" as const, itemName: `⚠️ ${rawText}`, divisionName: "", storeName: "" }];
+          : [{ type: "TASK" as const, itemName: `⚠️ ${cleanedText}`, divisionName: "", storeName: "" }];
 
         await prisma.$transaction(async (tx) => {
           for (const aiResult of itemsToSave) {
@@ -84,7 +87,7 @@ export async function addItemAction(rawText: string) {
         process.stderr.write(`[AI BACKGROUND ERROR] ${error}\n`);
         await prisma.item.updateMany({
           where: { id: placeholder.id },
-          data: { name: rawText },
+          data: { name: cleanedText },
         });
       } finally {
         revalidatePath("/");
