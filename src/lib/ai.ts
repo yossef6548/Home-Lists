@@ -44,11 +44,11 @@ Allowed stores and divisions:
 ${hierarchyLines}
 
 Output format (strict):
-{"items":[{"type":"TASK","storeName":"","divisionName":"","itemName":"..."}]}
-{"items":[{"type":"SHOPPING","storeName":"סופרמרקט","divisionName":"חלבי וביצים","itemName":"חלב"}]}
+{"items":[{"type":"TASK","storeName":"","divisionName":"","itemName":"the task that the user mentioned"}]}
+{"items":[{"type":"SHOPPING","storeName":"from allowed stores","divisionName":"from allowed divisons","itemName":"the item that the user want to shop"}]}
 
 Example:
-User: "חלב ולשטוף כלים"
+User: "אין חלב ויש כלים מלוכלכים בכיור"
 Answer: {"items":[{"type":"SHOPPING","storeName":"סופרמרקט","divisionName":"חלבי וביצים","itemName":"חלב"},{"type":"TASK","storeName":"","divisionName":"","itemName":"לשטוף כלים"}]}`;
 
   try {
