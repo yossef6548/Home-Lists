@@ -5,7 +5,7 @@ import { processWithAI, getFixedHierarchy, categorizeSingleItem, clearCategoryCa
 import type { AIProgressEvent } from "@/lib/ai";
 import { broadcastUpdate } from "@/lib/events";
 import { ItemType } from "@prisma/client";
-import { revalidatePath } from "next/cache";
+import { revalidatePath, unstable_noStore as noStore } from "next/cache";
 
 // Global queue for background processing
 declare global {
@@ -234,6 +234,7 @@ export async function deleteItemAction(id: string) {
 }
 
 export async function getAppData() {
+  noStore();
   const [items, categories] = await Promise.all([
     prisma.item.findMany({ orderBy: [{ isChecked: "asc" }, { createdAt: "desc" }] }),
     prisma.category.findMany({ include: { children: true } }),
