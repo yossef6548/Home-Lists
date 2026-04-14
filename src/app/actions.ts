@@ -97,7 +97,6 @@ export async function addItemAction(rawText: string) {
           default:
             break;
         }
-        revalidatePath("/");
         broadcastUpdate();
       };
 
@@ -155,7 +154,6 @@ export async function addItemAction(rawText: string) {
           });
         }
       } finally {
-        revalidatePath("/");
         broadcastUpdate();
       }
     };
@@ -216,7 +214,6 @@ export async function moveTaskToShoppingAction(id: string) {
     } catch {
       await prisma.item.update({ where: { id }, data: { name: originalName } });
     } finally {
-      revalidatePath("/");
       broadcastUpdate();
     }
   };
