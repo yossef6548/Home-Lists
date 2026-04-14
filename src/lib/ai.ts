@@ -34,11 +34,12 @@ export async function processWithAI(text: string): Promise<AIResponse> {
   const systemPrompt = `You are a smart list assistant. Reply ONLY with valid JSON, no extra text.
 
 Rules:
-- Split combined requests ("X and Y") into separate items.
+- analyze the user prompt and Split combined requests into separate items.
+- for each item rephrase it if needed and understand if it a todo task or a product to buy.
 - type "TASK" = an action/chore (e.g. "לשטוף", "לתקן"). storeName and divisionName = "".
-- type "SHOPPING" = a product to buy. Pick storeName and divisionName from the list below EXACTLY as written.
-- itemName MUST always be the full Hebrew word(s) the user said. Never leave it empty.
-- No backslashes inside string values. No trailing commas.
+- type "SHOPPING" = a product to buy. Pick the best fit storeName and divisionName from the list below EXACTLY as written.
+- itemName MUST always be Hebrew word(s) that the user said. Never leave it empty.
+- No backslashes or symbols inside string values. No trailing commas.
 
 Allowed stores and divisions:
 ${hierarchyLines}
@@ -46,6 +47,7 @@ ${hierarchyLines}
 Output format (strict):
 {"items":[{"type":"TASK","storeName":"","divisionName":"","itemName":"the task that the user mentioned"}]}
 {"items":[{"type":"SHOPPING","storeName":"from allowed stores","divisionName":"from allowed divisons","itemName":"the item that the user want to shop"}]}
+it can also be multiple TASK items or SHOPPING items or a combination of both in the items list based on what you analyzed from the user prompt
 
 Example:
 User: "אין חלב ויש כלים מלוכלכים בכיור"
@@ -58,7 +60,7 @@ Answer: {"items":[{"type":"SHOPPING","storeName":"סופרמרקט","divisionNam
       body: JSON.stringify({
         model: "qwen2.5:0.5b", 
         system: systemPrompt,
-        prompt: `נתח את הטקסט הבא: "${text}"`,
+        prompt: text,
         stream: false,
         format: "json",
         options: { temperature: 0 }
