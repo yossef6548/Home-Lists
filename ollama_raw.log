@@ -1,3 +1,5 @@
+this file created by changing the port in .env to 11435 and running the command socat TCP-LISTEN:11435,reuseaddr,fork SYSTEM:'tee -a ollama_raw.log | socat - "TCP4:localhost:11434" | tee -a ollama_raw.log'
+
 POST /api/chat HTTP/1.1
 host: 127.0.0.1:11435
 connection: keep-alive
