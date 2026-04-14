@@ -2,6 +2,7 @@
 
 import prisma from "@/lib/prisma";
 import { processWithAI, getFixedHierarchy, categorizeSingleItem, clearCategoryCache } from "@/lib/ai";
+import type { AIProgressEvent } from "@/lib/ai";
 import { broadcastUpdate } from "@/lib/events";
 import { ItemType } from "@prisma/client";
 import { revalidatePath } from "next/cache";
@@ -41,7 +42,7 @@ export async function addItemAction(rawText: string) {
     
     // 1. Create placeholder immediately for instant UI feedback
     const placeholder = await prisma.item.create({
-      data: { name: `🔄 מעבד: ${cleanedText}`, type: "TASK" },
+      data: { name: `🔄 מפצל: ${cleanedText}`, type: "TASK" },
     });
     
     revalidatePath("/");
@@ -49,8 +50,59 @@ export async function addItemAction(rawText: string) {
 
     // 2. Run AI in the background WITHOUT 'await' so the user doesn't wait
     const processingTask = async () => {
+      const stageRowsByIndex = new Map<number, string>();
+      let splitPlaceholderId: string | null = placeholder.id;
+
+      const handleProgress = async (event: AIProgressEvent) => {
+        switch (event.stage) {
+          case "SPLITTING_START":
+            if (splitPlaceholderId) {
+              await prisma.item.updateMany({
+                where: { id: splitPlaceholderId },
+                data: { name: `🔄 מפצל: ${cleanedText}` },
+              });
+            }
+            break;
+          case "SPLITTING_DONE":
+            if (splitPlaceholderId) {
+              await prisma.item.deleteMany({ where: { id: splitPlaceholderId } });
+              splitPlaceholderId = null;
+            }
+
+            for (let i = 0; i < event.isolatedItems.length; i += 1) {
+              const item = await prisma.item.create({
+                data: { name: `🔄 מסווג: ${event.isolatedItems[i]}`, type: "TASK" },
+              });
+              stageRowsByIndex.set(i, item.id);
+            }
+            break;
+          case "CLASSIFYING":
+            await prisma.item.updateMany({
+              where: { id: stageRowsByIndex.get(event.index) || "" },
+              data: { name: `🔄 מסווג: ${event.itemText}` },
+            });
+            break;
+          case "TASK_REPHRASING":
+            await prisma.item.updateMany({
+              where: { id: stageRowsByIndex.get(event.index) || "" },
+              data: { name: `🔄 מנסח: ${event.itemText}` },
+            });
+            break;
+          case "SHOPPING_CATEGORIZING":
+            await prisma.item.updateMany({
+              where: { id: stageRowsByIndex.get(event.index) || "" },
+              data: { name: `🔄 משייך: ${event.itemText}` },
+            });
+            break;
+          default:
+            break;
+        }
+        revalidatePath("/");
+        broadcastUpdate();
+      };
+
       try {
-        const aiResponse = await processWithAI(cleanedText);
+        const aiResponse = await processWithAI(cleanedText, handleProgress);
         const itemsToSave = aiResponse.items.length > 0
           ? aiResponse.items
           : [{ type: "TASK" as const, itemName: `⚠️ ${cleanedText}`, divisionName: "", storeName: "" }];
@@ -80,15 +132,28 @@ export async function addItemAction(rawText: string) {
               },
             });
           }
-          // 3. Cleanup placeholder
-          await tx.item.deleteMany({ where: { id: placeholder.id } });
+          // 3. Cleanup placeholders
+          await tx.item.deleteMany({
+            where: {
+              id: {
+                in: [placeholder.id, ...Array.from(stageRowsByIndex.values())],
+              },
+            },
+          });
         });
       } catch (error) {
         process.stderr.write(`[AI BACKGROUND ERROR] ${error}\n`);
-        await prisma.item.updateMany({
-          where: { id: placeholder.id },
-          data: { name: cleanedText },
-        });
+        await prisma.item.deleteMany({ where: { id: { in: Array.from(stageRowsByIndex.values()) } } });
+        if (splitPlaceholderId) {
+          await prisma.item.updateMany({
+            where: { id: splitPlaceholderId },
+            data: { name: cleanedText },
+          });
+        } else {
+          await prisma.item.create({
+            data: { name: cleanedText, type: "TASK" },
+          });
+        }
       } finally {
         revalidatePath("/");
         broadcastUpdate();
@@ -99,7 +164,7 @@ export async function addItemAction(rawText: string) {
     globalThis.aiProcessingQueue = globalThis.aiProcessingQueue!.then(processingTask).catch(() => {});
 
     return { success: true };
-  } catch (error) {
+  } catch {
     return { success: false };
   }
 }
@@ -127,7 +192,7 @@ export async function moveTaskToShoppingAction(id: string) {
   if (!item) return;
 
   const originalName = item.name;
-  await prisma.item.update({ where: { id }, data: { type: "SHOPPING", name: `🔄 מסווג: ${item.name}` } });
+  await prisma.item.update({ where: { id }, data: { type: "SHOPPING", name: `🔄 משייך: ${item.name}` } });
   revalidatePath("/");
   broadcastUpdate();
 
@@ -148,7 +213,7 @@ export async function moveTaskToShoppingAction(id: string) {
       } else {
         await prisma.item.update({ where: { id }, data: { name: originalName } });
       }
-    } catch (err) {
+    } catch {
       await prisma.item.update({ where: { id }, data: { name: originalName } });
     } finally {
       revalidatePath("/");
