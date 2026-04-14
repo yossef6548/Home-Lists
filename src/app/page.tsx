@@ -79,7 +79,6 @@ export default function Home() {
   }, [data, mutate, refresh]);
 
   const handleDelete = useCallback(async (id: string) => {
-    if (!confirm("למחוק?")) return;
     mutate("app-data", {
       ...data,
       items: data?.items.filter((i: Item) => i.id !== id)
@@ -177,10 +176,8 @@ export default function Home() {
                 categories={data?.categories || []}
                 onToggle={handleToggle} 
                 onClear={async () => {
-                  if (confirm("לנקות?")) {
-                    await clearCheckedAction("TASK");
-                    refresh();
-                  }
+                  await clearCheckedAction("TASK");
+                  refresh();
                 }}
                 onDelete={handleDelete}
                 onRename={handleRename}
@@ -192,10 +189,8 @@ export default function Home() {
                 categories={data?.categories || []}
                 onToggle={handleToggle}
                 onClear={async () => {
-                  if (confirm("לנקות?")) {
-                    await clearCheckedAction("SHOPPING");
-                    refresh();
-                  }
+                  await clearCheckedAction("SHOPPING");
+                  refresh();
                 }}
                 onDelete={handleDelete}
                 onRename={handleRename}
