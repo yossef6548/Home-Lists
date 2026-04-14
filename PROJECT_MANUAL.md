@@ -11,7 +11,7 @@ The primary goal is **Zero-Effort Entry**: A user can type (or dictate via Siri)
 - **Frontend:** Next.js 15 (App Router), Tailwind CSS 4.
 - **Backend:** Next.js Server Actions (stateless logic).
 - **Database:** PostgreSQL via Prisma ORM.
-- **AI Engine:** Ollama running `qwen2.5:0.5b` on the host machine.
+- **AI Engine:** Ollama running `qwen3:17b` on the host machine.
 - **Real-Time Sync:** Server-Sent Events (SSE) via a custom `/api/events` stream and a global `EventEmitter`.
 - **State Management:** `SWR` for optimistic client-side updates and automatic revalidation.
 
