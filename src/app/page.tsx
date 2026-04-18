@@ -55,7 +55,7 @@ export default function Home() {
     const tempId = Math.random().toString();
     mutate("app-data", {
       ...data,
-      items: [{ id: tempId, name: `🔄 מעבד: ${text}`, type: "TASK", isChecked: false, categoryId: null, createdAt: new Date(), updatedAt: new Date(), order: 0 }, ...(data?.items || [])]
+      items: [{ id: tempId, name: `🔄 מפצל: ${text}`, type: "TASK", isChecked: false, categoryId: null, createdAt: new Date(), updatedAt: new Date(), order: 0 }, ...(data?.items || [])]
     }, false);
 
     try {

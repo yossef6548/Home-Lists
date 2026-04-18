@@ -1,4 +1,3 @@
-import prisma from "./prisma";
 import fs from "fs";
 import path from "path";
 
@@ -15,35 +14,61 @@ export interface AIResponse {
 
 type Hierarchy = Record<string, string[]>;
 
-function buildOutputSchema() {
+export type AIProgressEvent =
+  | { stage: "SPLITTING_START" }
+  | { stage: "SPLITTING_DONE"; isolatedItems: string[] }
+  | { stage: "CLASSIFYING"; index: number; itemText: string }
+  | { stage: "TASK_REPHRASING"; index: number; itemText: string }
+  | { stage: "SHOPPING_CATEGORIZING"; index: number; itemText: string };
+
+function buildStringArraySchema() {
   return {
     type: "object",
     properties: {
       items: {
         type: "array",
-        items: {
-          type: "object",
-          properties: {
-            type: {
-              type: "string",
-              enum: ["TASK", "SHOPPING"],
-            },
-            storeName: {
-              type: "string",
-            },
-            divisionName: {
-              type: "string",
-            },
-            itemName: {
-              type: "string",
-            },
-          },
-          required: ["type", "storeName", "divisionName", "itemName"],
-          additionalProperties: false,
-        },
+        items: { type: "string" },
       },
     },
     required: ["items"],
+    additionalProperties: false,
+  } as const;
+}
+
+function buildTypeSchema() {
+  return {
+    type: "object",
+    properties: {
+      type: {
+        type: "string",
+        enum: ["TASK", "SHOPPING"],
+      },
+    },
+    required: ["type"],
+    additionalProperties: false,
+  } as const;
+}
+
+function buildTaskRephraseSchema() {
+  return {
+    type: "object",
+    properties: {
+      itemName: { type: "string" },
+    },
+    required: ["itemName"],
+    additionalProperties: false,
+  } as const;
+}
+
+function buildShoppingCategorySchema() {
+  return {
+    type: "object",
+    properties: {
+      storeName: { type: "string" },
+      divisionName: { type: "string" },
+      itemName: { type: "string" },
+    },
+    required: ["storeName", "divisionName", "itemName"],
     additionalProperties: false,
   } as const;
 }
@@ -59,12 +84,46 @@ function sanitizeItemName(value: string): string {
   return normalizeLoose(value).replace(/[\\]/g, "");
 }
 
+async function callOllamaJSON<T>({
+  systemPrompt,
+  userPrompt,
+  schema,
+}: {
+  systemPrompt: string;
+  userPrompt: string;
+  schema: Record<string, unknown>;
+}): Promise<T> {
+  const response = await fetch(`${process.env.OLLAMA_URL}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: process.env.OLLAMA_MODEL || "qwen3:1.7b",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      stream: false,
+      format: schema,
+      options: {
+        temperature: 0,
+        num_ctx: 1024,
+      },
+    }),
+  });
+
+  if (!response.ok) throw new Error("AI request failed");
+  const data = await response.json();
+  const rawResponse = data?.message?.content || "";
+  process.stdout.write(`\n[AI DEBUG] INPUT: ${userPrompt} | RAW: ${rawResponse}\n`);
+  return JSON.parse(rawResponse) as T;
+}
+
 export function getFixedHierarchy(): Record<string, string[]> {
   try {
     const configPath = path.join(process.cwd(), "categories.json");
     const content = fs.readFileSync(configPath, "utf-8");
     return JSON.parse(content);
-  } catch (err) {
+  } catch {
     return { "אחר": ["כללי"] };
   }
 }
@@ -167,67 +226,133 @@ function finalizeAIItems(rawItems: unknown, hierarchy: Hierarchy): AIItem[] {
   return finalized;
 }
 
-export async function processWithAI(text: string): Promise<AIResponse> {
+async function isolateItems(text: string): Promise<string[]> {
+  const parsed = await callOllamaJSON<{ items: string[] }>({
+    systemPrompt: `You split Hebrew user text into isolated list items.
+Reply ONLY with valid JSON.
+Rules:
+- Split compound requests to atomic items.
+- Keep items in Hebrew.
+- Keep each item short and clean.
+- Do not classify, do not add categories, do not add extra commentary.
+- Keep original meaning only.
+- If there is only one item, return one-element array.`,
+    userPrompt: text,
+    schema: buildStringArraySchema(),
+  });
+
+  const rawItems = Array.isArray(parsed.items) ? parsed.items : [];
+  const cleaned = rawItems.map(sanitizeItemName).filter(Boolean);
+  return cleaned.length > 0 ? cleaned : [sanitizeItemName(text)].filter(Boolean);
+}
+
+async function classifyIsolatedItem(text: string): Promise<"TASK" | "SHOPPING"> {
+  const parsed = await callOllamaJSON<{ type: "TASK" | "SHOPPING" }>({
+    systemPrompt: `Classify ONE Hebrew item.
+Reply ONLY with valid JSON: {"type":"TASK"} or {"type":"SHOPPING"}.
+Rules:
+- TASK = action/chore/thing to do.
+- SHOPPING = product/thing to buy.`,
+    userPrompt: text,
+    schema: buildTypeSchema(),
+  });
+
+  return parsed.type === "SHOPPING" ? "SHOPPING" : "TASK";
+}
+
+async function rephraseTaskItem(text: string): Promise<string> {
+  const parsed = await callOllamaJSON<{ itemName: string }>({
+    systemPrompt: `Rewrite ONE Hebrew task into a concise imperative task phrase.
+Reply ONLY with valid JSON.
+Rules:
+- Output in Hebrew.
+- Keep it short and actionable.
+- Example: "הבית שלנו מלוכלך" -> "לשטוף את הבית"
+- Example: "שכחתי להתקשר לאמא" -> "להתקשר לאמא"`,
+    userPrompt: text,
+    schema: buildTaskRephraseSchema(),
+  });
+
+  return sanitizeItemName(parsed.itemName || text) || sanitizeItemName(text);
+}
+
+export async function categorizeShoppingItem(itemName: string): Promise<AIItem | null> {
   const hierarchy = getFixedHierarchy();
   const hierarchyLines = Object.entries(hierarchy)
     .map(([store, divs]) => `${store}: ${divs.join(", ")}`)
     .join("\n");
 
-  const outputSchema = buildOutputSchema();
-
-  const systemPrompt = `You are a smart list assistant.
-Reply ONLY with valid JSON matching the required schema. No extra text.
-
+  const parsed = await callOllamaJSON<{
+    storeName: string;
+    divisionName: string;
+    itemName: string;
+  }>({
+    systemPrompt: `Categorize ONE Hebrew shopping item.
+Reply ONLY with valid JSON.
 Rules:
-- Analyze the user message and split combined requests into separate items.
-- For each item decide whether it is a TASK or SHOPPING item.
-- TASK = an action, chore, or thing to do. For TASK always use storeName = "" and divisionName = "".
-- SHOPPING = a product or thing to buy.
-- For SHOPPING, storeName and divisionName must be chosen ONLY from the allowed stores and divisions below, exactly as written.
-- itemName must never be empty.
-- itemName must stay in Hebrew and should be based on the user's original wording.
-- Keep itemName short and clean.
-- Do not invent stores or divisions that are not in the list.
-- Return JSON only.
+- You must choose storeName/divisionName ONLY from the allowed hierarchy below, exactly as written.
+- Keep itemName in Hebrew, short and clean.
+- Do not invent stores or divisions.
 
 Allowed stores and divisions:
-${hierarchyLines}
+${hierarchyLines}`,
+    userPrompt: itemName,
+    schema: buildShoppingCategorySchema(),
+  });
 
-Example:
-User: "אין חלב ויש כלים מלוכלכים בכיור"
-Answer:
-{"items":[{"type":"SHOPPING","storeName":"סופרמרקט","divisionName":"חלבי וביצים","itemName":"חלב"},{"type":"TASK","storeName":"","divisionName":"","itemName":"לשטוף כלים"}]}`;
+  const fallback = getFallbackStoreAndDivision(hierarchy);
+  const resolvedStore = resolveStoreName(String(parsed.storeName || ""), hierarchy);
+  const storeName = resolvedStore || fallback.storeName;
+  const divisionName = resolveDivisionName(
+    String(parsed.divisionName || ""),
+    storeName,
+    hierarchy
+  ) || fallback.divisionName;
+  const safeItemName = sanitizeItemName(parsed.itemName || itemName) || sanitizeItemName(itemName);
 
+  if (!safeItemName) return null;
+  return {
+    type: "SHOPPING",
+    storeName,
+    divisionName,
+    itemName: safeItemName,
+  };
+}
+
+export async function processWithAI(
+  text: string,
+  onProgress?: (event: AIProgressEvent) => Promise<void> | void
+): Promise<AIResponse> {
   try {
-    const response = await fetch(`${process.env.OLLAMA_URL}/api/chat`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: process.env.OLLAMA_MODEL || "qwen3:1.7b",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: text },
-        ],
-        stream: false,
-        format: outputSchema,
-        options: {
-          temperature: 0,
-          num_ctx: 1024,
-        },
-      }),
-    });
+    await onProgress?.({ stage: "SPLITTING_START" });
+    const isolatedItems = await isolateItems(text);
+    await onProgress?.({ stage: "SPLITTING_DONE", isolatedItems });
 
-    if (!response.ok) throw new Error("AI request failed");
+    const finalizedItems: AIItem[] = [];
 
-    const data = await response.json();
-    let rawResponse = data?.message?.content || "";
+    for (let index = 0; index < isolatedItems.length; index += 1) {
+      const isolatedItem = isolatedItems[index];
+      await onProgress?.({ stage: "CLASSIFYING", index, itemText: isolatedItem });
+      const type = await classifyIsolatedItem(isolatedItem);
 
-    process.stdout.write(`\n[AI DEBUG] INPUT: ${text} | RAW: ${rawResponse}\n`);
+      if (type === "TASK") {
+        await onProgress?.({ stage: "TASK_REPHRASING", index, itemText: isolatedItem });
+        const taskName = await rephraseTaskItem(isolatedItem);
+        finalizedItems.push({
+          type: "TASK",
+          storeName: "",
+          divisionName: "",
+          itemName: taskName,
+        });
+        continue;
+      }
 
-    const parsed = JSON.parse(rawResponse);
-    const finalized = finalizeAIItems(parsed.items, hierarchy);
+      await onProgress?.({ stage: "SHOPPING_CATEGORIZING", index, itemText: isolatedItem });
+      const shopping = await categorizeShoppingItem(isolatedItem);
+      if (shopping) finalizedItems.push(shopping);
+    }
 
-    return { items: finalized };
+    return { items: finalizeAIItems(finalizedItems, getFixedHierarchy()) };
   } catch (err) {
     process.stderr.write(`[AI ERROR] ${err}\n`);
     return {
@@ -244,6 +369,5 @@ Answer:
 }
 
 export async function categorizeSingleItem(itemName: string): Promise<AIItem | null> {
-  const res = await processWithAI(itemName);
-  return res.items.length > 0 ? res.items[0] : null;
+  return categorizeShoppingItem(itemName);
 }
